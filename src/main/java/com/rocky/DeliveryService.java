@@ -11,7 +11,26 @@ public class DeliveryService {
 
         List<DeliveryEvent> deliveryEvents = new ArrayList<>();
 
-        System.out.println(processEventsUsingConditionalStatements(deliveryEvents));
+        Map<String, DeliveryResult> resultMap = processEventsUsingFSM(deliveryEvents);
+
+        for (Map.Entry<String, DeliveryResult> entry : resultMap.entrySet()) {
+            String trackingId = entry.getKey();
+            DeliveryResult result = entry.getValue();
+
+            System.out.println("Tracking ID: " + trackingId);
+            System.out.println("Final State: " + result.finalState);
+
+            if (!result.invalidEvents.isEmpty()) {
+                System.out.println("Invalid Events:");
+                for (DeliveryEvent e : result.invalidEvents) {
+                    System.out.println("  → " + e.type + " at timestamp " + e.timestamp);
+                }
+            } else {
+                System.out.println("Invalid Events: None");
+            }
+
+            System.out.println("-------------------------");
+        }
     }
 
 
@@ -76,6 +95,15 @@ public class DeliveryService {
             this.trackingId = trackingId;
             this.timestamp = timestamp;
             this.type = type;
+        }
+
+        @Override
+        public String toString() {
+            return "DeliveryEvent{" +
+                    "trackingId='" + trackingId + '\'' +
+                    ", timestamp=" + timestamp +
+                    ", type=" + type +
+                    '}';
         }
     }
 
@@ -162,6 +190,78 @@ public class DeliveryService {
                     }
                 } else {
                     // already in a final state (should never reach here due to isFinal flag)
+                    invalids.add(event);
+                }
+            }
+
+            DeliveryResult deliveryResult = new DeliveryResult(currentState);
+            deliveryResult.invalidEvents.addAll(invalids);
+            result.put(trackingId, deliveryResult);
+        }
+
+        return result;
+    }
+
+    public static Map<String, DeliveryResult> processEventsUsingFSM(List<DeliveryEvent> events) {
+
+        // Sample events to test
+        List<DeliveryEvent> events2 = List.of(
+                new DeliveryEvent("D1", 1, DeliveryEvent.EventType.CREATED),
+                new DeliveryEvent("D1", 2, DeliveryEvent.EventType.LOST),
+                new DeliveryEvent("D1", 3, DeliveryEvent.EventType.PICKED_UP),
+                new DeliveryEvent("D2", 1, DeliveryEvent.EventType.CREATED),
+                new DeliveryEvent("D2", 2, DeliveryEvent.EventType.PICKED_UP),
+                new DeliveryEvent("D2", 3, DeliveryEvent.EventType.IN_TRANSIT),
+                new DeliveryEvent("D2", 4, DeliveryEvent.EventType.DELIVERED),
+                new DeliveryEvent("D2", 5, DeliveryEvent.EventType.RETURNED)
+        );
+        events.addAll(events2);
+
+        // 1. Define valid transitions
+        Map<DeliveryEvent.EventType, Set<DeliveryEvent.EventType>> transitions = new HashMap<>();
+        transitions.put(null, Set.of(DeliveryEvent.EventType.CREATED)); // initial
+        transitions.put(DeliveryEvent.EventType.CREATED, Set.of(DeliveryEvent.EventType.PICKED_UP));
+        transitions.put(DeliveryEvent.EventType.PICKED_UP, Set.of(DeliveryEvent.EventType.IN_TRANSIT));
+        transitions.put(DeliveryEvent.EventType.IN_TRANSIT,
+                Set.of(DeliveryEvent.EventType.DELIVERED, DeliveryEvent.EventType.LOST, DeliveryEvent.EventType.RETURNED));
+
+        Set<DeliveryEvent.EventType> finalStates = Set.of(
+                DeliveryEvent.EventType.DELIVERED,
+                DeliveryEvent.EventType.LOST,
+                DeliveryEvent.EventType.RETURNED
+        );
+
+        // 2. Group by trackingId
+        Map<String, List<DeliveryEvent>> grouped = new HashMap<>();
+        for (DeliveryEvent e : events) {
+            grouped.computeIfAbsent(e.trackingId, k -> new ArrayList<>()).add(e);
+        }
+
+        // 3. Process each delivery
+        Map<String, DeliveryResult> result = new HashMap<>();
+
+        for (Map.Entry<String, List<DeliveryEvent>> entry : grouped.entrySet()) {
+            String trackingId = entry.getKey();
+            List<DeliveryEvent> deliveryEvents = entry.getValue();
+            deliveryEvents.sort(Comparator.comparingLong(e -> e.timestamp));
+
+            DeliveryEvent.EventType currentState = null;
+            boolean isFinal = false;
+            List<DeliveryEvent> invalids = new ArrayList<>();
+
+            for (DeliveryEvent event : deliveryEvents) {
+                if (isFinal) {
+                    invalids.add(event);
+                    continue;
+                }
+
+                Set<DeliveryEvent.EventType> allowedNext = transitions.getOrDefault(currentState, Collections.emptySet());
+                if (allowedNext.contains(event.type)) {
+                    currentState = event.type;
+                    if (finalStates.contains(currentState)) {
+                        isFinal = true;
+                    }
+                } else {
                     invalids.add(event);
                 }
             }
